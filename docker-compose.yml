@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: math-tutor-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: math_tutor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d math_tutor" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - math-tutor-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: math-tutor-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - math-tutor-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: math-tutor-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: math_tutor
+      DB_USER: postgres
+      DB_PASSWORD: postgres123
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/math_tutor
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379
+
+      # OPENAI_API_KEY: your_openai_api_key_here
+
+      LOG_LEVEL: info
+
+    volumes:
+      - ./src:/app/src:ro
+      - ./package.json:/app/package.json:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+      - node_modules:/app/node_modules
+    networks:
+      - math-tutor-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: math-tutor-pgadmin
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "8080:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - math-tutor-network
+    profiles:
+      - admin
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: math-tutor-redis-commander
+    restart: unless-stopped
+    depends_on:
+      - redis
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+      HTTP_USER: admin
+      HTTP_PASSWORD: admin123
+    networks:
+      - math-tutor-network
+    profiles:
+      - admin
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  node_modules:
+    driver: local
+
+networks:
+  math-tutor-network:
+    driver: bridge
+    name: math-tutor-network
